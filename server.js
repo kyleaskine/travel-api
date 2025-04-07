@@ -1,6 +1,7 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
+const path = require('path'); // Add this line for the path module
 const connectDB = require('./config/db');
 
 // Load environment variables
@@ -16,8 +17,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // Routes
 app.use('/api/trips', require('./routes/tripRoutes'));
+app.use('/api/media', require('./routes/mediaRoutes')); // Add this line for media routes
 
 // Root route for API health check
 app.get('/', (req, res) => {
