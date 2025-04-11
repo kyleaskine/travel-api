@@ -22,7 +22,8 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.use('/api/trips', require('./routes/tripRoutes'));
-app.use('/api/media', require('./routes/mediaRoutes')); // Add this line for media routes
+app.use('/api/media', require('./routes/mediaRoutes'));
+app.use('/api/albums', require('./routes/albumRoutes'));
 
 // Root route for API health check
 app.get('/', (req, res) => {
