@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const Trip = require('../models/Trip');
+const MediaItem = require('../models/MediaItem');
+const Album = require('../models/Album');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -49,7 +50,6 @@ router.post('/upload', upload.single('photo'), (req, res) => {
     }
     
     // Return the file path that can be accessed publicly
-    // In production, you might use a CDN or cloud storage URL
     const filePath = `/uploads/${req.file.filename}`;
     
     res.status(201).json({
@@ -62,12 +62,41 @@ router.post('/upload', upload.single('photo'), (req, res) => {
   }
 });
 
-// @desc    Add media to segment
-// @route   POST /api/media/segment/:tripId/:segmentId
+// @desc    Get all media items for an album
+// @route   GET /api/media/album/:albumId
 // @access  Public (would typically be Private with auth)
-router.post('/segment/:tripId/:segmentId', async (req, res) => {
+router.get('/album/:albumId', async (req, res) => {
   try {
-    const { tripId, segmentId } = req.params;
+    const { albumId } = req.params;
+    
+    // Validate albumId
+    if (!albumId) {
+      return res.status(400).json({ message: 'Album ID is required' });
+    }
+    
+    // Check if album exists
+    const album = await Album.findById(albumId);
+    if (!album) {
+      return res.status(404).json({ message: 'Album not found' });
+    }
+    
+    // Get all media items for this album
+    const mediaItems = await MediaItem.find({ albumId })
+      .sort({ sortOrder: 1, dateCreated: -1 }); // Sort by manual order, then by date
+    
+    res.json(mediaItems);
+  } catch (error) {
+    console.error(`Error fetching media for album ${req.params.albumId}:`, error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @desc    Add media to an album
+// @route   POST /api/media/album/:albumId
+// @access  Public (would typically be Private with auth)
+router.post('/album/:albumId', async (req, res) => {
+  try {
+    const { albumId } = req.params;
     const { type, content, caption } = req.body;
     
     // Basic validation
@@ -79,201 +108,229 @@ router.post('/segment/:tripId/:segmentId', async (req, res) => {
       return res.status(400).json({ message: 'Type must be photo or note' });
     }
     
-    // Find the trip
-    const trip = await Trip.findById(tripId);
-    if (!trip) {
-      return res.status(404).json({ message: 'Trip not found' });
+    // Check if album exists
+    const album = await Album.findById(albumId);
+    if (!album) {
+      return res.status(404).json({ message: 'Album not found' });
     }
     
-    // Find the segment
-    const segmentIndex = trip.segments.findIndex(s => s._id.toString() === segmentId);
-    if (segmentIndex === -1) {
-      return res.status(404).json({ message: 'Segment not found' });
-    }
-    
-    // Create the new media item
-    const newMedia = {
+    // Create new media item
+    const mediaItem = new MediaItem({
+      albumId,
       type,
       content,
       caption,
       dateCreated: new Date()
-    };
+    });
     
-    // Add the media to the segment
-    if (!trip.segments[segmentIndex].media) {
-      trip.segments[segmentIndex].media = [];
+    // Save the media item
+    const savedMediaItem = await mediaItem.save();
+    
+    // If this is a photo and the album has no cover image, set this as the cover
+    if (type === 'photo' && !album.coverImageId) {
+      album.coverImageId = savedMediaItem._id;
+      await album.save();
     }
     
-    trip.segments[segmentIndex].media.push(newMedia);
+    // Update the lastUpdated timestamp on the album
+    album.lastUpdated = new Date();
+    await album.save();
     
-    // Save the trip
-    await trip.save();
-    
-    res.status(201).json({
-      message: 'Media added successfully',
-      media: newMedia
-    });
+    res.status(201).json(savedMediaItem);
   } catch (error) {
-    console.error(error);
+    console.error(`Error adding media to album ${req.params.albumId}:`, error);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// @desc    Add media to stay
-// @route   POST /api/media/stay/:tripId/:stayId
+// @desc    Get a single media item
+// @route   GET /api/media/:id
 // @access  Public (would typically be Private with auth)
-router.post('/stay/:tripId/:stayId', async (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const { tripId, stayId } = req.params;
-    const { type, content, caption } = req.body;
+    const mediaItem = await MediaItem.findById(req.params.id);
     
-    // Basic validation
-    if (!type || !content) {
-      return res.status(400).json({ message: 'Please provide type and content' });
+    if (!mediaItem) {
+      return res.status(404).json({ message: 'Media item not found' });
     }
     
-    if (type !== 'photo' && type !== 'note') {
-      return res.status(400).json({ message: 'Type must be photo or note' });
-    }
-    
-    // Find the trip
-    const trip = await Trip.findById(tripId);
-    if (!trip) {
-      return res.status(404).json({ message: 'Trip not found' });
-    }
-    
-    // Find the stay
-    const stayIndex = trip.stays.findIndex(s => s._id.toString() === stayId);
-    if (stayIndex === -1) {
-      return res.status(404).json({ message: 'Stay not found' });
-    }
-    
-    // Create the new media item
-    const newMedia = {
-      type,
-      content,
-      caption,
-      dateCreated: new Date()
-    };
-    
-    // Add the media to the stay
-    if (!trip.stays[stayIndex].media) {
-      trip.stays[stayIndex].media = [];
-    }
-    
-    trip.stays[stayIndex].media.push(newMedia);
-    
-    // Save the trip
-    await trip.save();
-    
-    res.status(201).json({
-      message: 'Media added successfully',
-      media: newMedia
-    });
+    res.json(mediaItem);
   } catch (error) {
-    console.error(error);
+    console.error(`Error fetching media item ${req.params.id}:`, error);
+    if (error.kind === 'ObjectId') {
+      return res.status(404).json({ message: 'Media item not found' });
+    }
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// @desc    Delete media from segment
-// @route   DELETE /api/media/segment/:tripId/:segmentId/:mediaId
+// @desc    Update a media item
+// @route   PUT /api/media/:id
 // @access  Public (would typically be Private with auth)
-router.delete('/segment/:tripId/:segmentId/:mediaId', async (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
-    const { tripId, segmentId, mediaId } = req.params;
+    const { caption, sortOrder } = req.body;
     
-    // Find the trip
-    const trip = await Trip.findById(tripId);
-    if (!trip) {
-      return res.status(404).json({ message: 'Trip not found' });
+    // Find the media item
+    const mediaItem = await MediaItem.findById(req.params.id);
+    if (!mediaItem) {
+      return res.status(404).json({ message: 'Media item not found' });
     }
     
-    // Find the segment
-    const segment = trip.segments.id(segmentId);
-    if (!segment) {
-      return res.status(404).json({ message: 'Segment not found' });
+    // Update fields
+    if (caption !== undefined) mediaItem.caption = caption;
+    if (sortOrder !== undefined) mediaItem.sortOrder = sortOrder;
+    
+    // Save the updated media item
+    const updatedMediaItem = await mediaItem.save();
+    
+    // Update the lastUpdated timestamp on the album
+    const album = await Album.findById(mediaItem.albumId);
+    if (album) {
+      album.lastUpdated = new Date();
+      await album.save();
     }
     
-    // Find and remove the media
-    if (!segment.media || segment.media.length === 0) {
-      return res.status(404).json({ message: 'No media found for this segment' });
+    res.json(updatedMediaItem);
+  } catch (error) {
+    console.error(`Error updating media item ${req.params.id}:`, error);
+    if (error.kind === 'ObjectId') {
+      return res.status(404).json({ message: 'Media item not found' });
+    }
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @desc    Delete a media item
+// @route   DELETE /api/media/:id
+// @access  Public (would typically be Private with auth)
+router.delete('/:id', async (req, res) => {
+  try {
+    // Find the media item
+    const mediaItem = await MediaItem.findById(req.params.id);
+    if (!mediaItem) {
+      return res.status(404).json({ message: 'Media item not found' });
     }
     
-    const mediaIndex = segment.media.findIndex(m => m._id.toString() === mediaId);
-    if (mediaIndex === -1) {
-      return res.status(404).json({ message: 'Media not found' });
+    // Store the albumId before deletion
+    const albumId = mediaItem.albumId;
+    
+    // If this is a photo and it's used as a cover image, update the album
+    const album = await Album.findById(albumId);
+    if (album && album.coverImageId && album.coverImageId.toString() === req.params.id) {
+      // Find another photo to use as cover
+      const anotherPhoto = await MediaItem.findOne({
+        albumId,
+        type: 'photo',
+        _id: { $ne: req.params.id }
+      });
+      
+      if (anotherPhoto) {
+        album.coverImageId = anotherPhoto._id;
+      } else {
+        album.coverImageId = null;
+      }
+      
+      await album.save();
     }
     
-    // If it's a photo, you might want to delete the file from storage
-    const media = segment.media[mediaIndex];
-    if (media.type === 'photo' && media.content.startsWith('/uploads/')) {
-      const filePath = path.join(__dirname, '..', media.content);
+    // If it's a photo, delete the file from disk
+    if (mediaItem.type === 'photo' && mediaItem.content.startsWith('/uploads/')) {
+      const filePath = path.join(__dirname, '..', mediaItem.content);
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
     }
     
-    // Remove the media from the array
-    segment.media.splice(mediaIndex, 1);
+    // Delete the media item
+    await mediaItem.remove();
     
-    // Save the trip
-    await trip.save();
+    // Update the lastUpdated timestamp on the album
+    if (album) {
+      album.lastUpdated = new Date();
+      await album.save();
+    }
     
-    res.json({ message: 'Media deleted successfully' });
+    res.json({ message: 'Media item deleted' });
   } catch (error) {
-    console.error(error);
+    console.error(`Error deleting media item ${req.params.id}:`, error);
+    if (error.kind === 'ObjectId') {
+      return res.status(404).json({ message: 'Media item not found' });
+    }
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// @desc    Delete media from stay
-// @route   DELETE /api/media/stay/:tripId/:stayId/:mediaId
+// @desc    Move media item to another album
+// @route   PUT /api/media/:id/move/:targetAlbumId
 // @access  Public (would typically be Private with auth)
-router.delete('/stay/:tripId/:stayId/:mediaId', async (req, res) => {
+router.put('/:id/move/:targetAlbumId', async (req, res) => {
   try {
-    const { tripId, stayId, mediaId } = req.params;
+    const { id, targetAlbumId } = req.params;
     
-    // Find the trip
-    const trip = await Trip.findById(tripId);
-    if (!trip) {
-      return res.status(404).json({ message: 'Trip not found' });
+    // Find the media item
+    const mediaItem = await MediaItem.findById(id);
+    if (!mediaItem) {
+      return res.status(404).json({ message: 'Media item not found' });
     }
     
-    // Find the stay
-    const stay = trip.stays.id(stayId);
-    if (!stay) {
-      return res.status(404).json({ message: 'Stay not found' });
+    // Check if target album exists
+    const targetAlbum = await Album.findById(targetAlbumId);
+    if (!targetAlbum) {
+      return res.status(404).json({ message: 'Target album not found' });
     }
     
-    // Find and remove the media
-    if (!stay.media || stay.media.length === 0) {
-      return res.status(404).json({ message: 'No media found for this stay' });
-    }
-    
-    const mediaIndex = stay.media.findIndex(m => m._id.toString() === mediaId);
-    if (mediaIndex === -1) {
-      return res.status(404).json({ message: 'Media not found' });
-    }
-    
-    // If it's a photo, you might want to delete the file from storage
-    const media = stay.media[mediaIndex];
-    if (media.type === 'photo' && media.content.startsWith('/uploads/')) {
-      const filePath = path.join(__dirname, '..', media.content);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+    // Check if this is a cover image for the current album
+    const sourceAlbum = await Album.findById(mediaItem.albumId);
+    if (sourceAlbum && sourceAlbum.coverImageId && sourceAlbum.coverImageId.toString() === id) {
+      // Find another photo to use as cover
+      const anotherPhoto = await MediaItem.findOne({
+        albumId: mediaItem.albumId,
+        type: 'photo',
+        _id: { $ne: id }
+      });
+      
+      if (anotherPhoto) {
+        sourceAlbum.coverImageId = anotherPhoto._id;
+      } else {
+        sourceAlbum.coverImageId = null;
       }
+      
+      sourceAlbum.lastUpdated = new Date();
+      await sourceAlbum.save();
     }
     
-    // Remove the media from the array
-    stay.media.splice(mediaIndex, 1);
+    // Update the media item with the new album ID
+    const oldAlbumId = mediaItem.albumId;
+    mediaItem.albumId = targetAlbumId;
+    const updatedMediaItem = await mediaItem.save();
     
-    // Save the trip
-    await trip.save();
+    // Update the lastUpdated timestamp on both albums
+    if (sourceAlbum) {
+      sourceAlbum.lastUpdated = new Date();
+      await sourceAlbum.save();
+    }
     
-    res.json({ message: 'Media deleted successfully' });
+    targetAlbum.lastUpdated = new Date();
+    
+    // If the target album has no cover image and this is a photo, set it as cover
+    if (mediaItem.type === 'photo' && !targetAlbum.coverImageId) {
+      targetAlbum.coverImageId = mediaItem._id;
+    }
+    
+    await targetAlbum.save();
+    
+    res.json({
+      message: 'Media item moved to new album',
+      mediaItem: updatedMediaItem,
+      oldAlbumId,
+      newAlbumId: targetAlbumId
+    });
   } catch (error) {
-    console.error(error);
+    console.error(`Error moving media item ${req.params.id}:`, error);
+    if (error.kind === 'ObjectId') {
+      return res.status(404).json({ message: 'Media item or album not found' });
+    }
     res.status(500).json({ message: 'Server error' });
   }
 });

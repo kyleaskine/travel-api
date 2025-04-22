@@ -1,22 +1,6 @@
 const mongoose = require('mongoose');
 
-const mediaSchema = new mongoose.Schema({
-  type: { 
-    type: String, 
-    required: true,
-    enum: ['photo', 'note']
-  },
-  content: { 
-    type: String, 
-    required: true 
-  }, // URL for photos, text content for notes
-  caption: String,
-  dateCreated: { 
-    type: Date, 
-    default: Date.now 
-  }
-});
-
+// Point schema for locations (unchanged)
 const pointSchema = new mongoose.Schema({
   name: { type: String, required: true },
   code: String,
@@ -32,6 +16,7 @@ const pointSchema = new mongoose.Schema({
   }
 });
 
+// Segment schema - updated to use album references instead of direct media
 const segmentSchema = new mongoose.Schema({
   date: { type: Date, required: true },
   type: { 
@@ -43,7 +28,12 @@ const segmentSchema = new mongoose.Schema({
   origin: { type: pointSchema, required: true },
   destination: { type: pointSchema, required: true },
   notes: String,
-  media: [mediaSchema] // Add media to segments
+  
+  // New field for default album reference
+  defaultAlbumId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Album'
+  }
 }, { 
   toJSON: { virtuals: true }, 
   toObject: { virtuals: true },
@@ -55,6 +45,15 @@ segmentSchema.virtual('id').get(function() {
   return this._id.toString();
 });
 
+// Virtual to get all albums related to this segment
+segmentSchema.virtual('albums', {
+  ref: 'Album',
+  localField: '_id',
+  foreignField: 'relatedItem.itemId',
+  match: { 'relatedItem.type': 'segment' }
+});
+
+// Stay schema - updated to use album references instead of direct media
 const staySchema = new mongoose.Schema({
   location: { type: String, required: true },
   coordinates: {
@@ -71,12 +70,26 @@ const staySchema = new mongoose.Schema({
   dateEnd: { type: Date, required: true },
   notes: String,
   amenities: [String],
-  media: [mediaSchema] // Add media to stays
+  
+  // New field for default album reference
+  defaultAlbumId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Album'
+  }
 }, { 
   toJSON: { virtuals: true }, 
   toObject: { virtuals: true } 
 });
 
+// Virtual to get all albums related to this stay
+staySchema.virtual('albums', {
+  ref: 'Album',
+  localField: '_id',
+  foreignField: 'relatedItem.itemId',
+  match: { 'relatedItem.type': 'stay' }
+});
+
+// Trip schema - updated to include default album reference
 const tripSchema = new mongoose.Schema({
   tripName: { type: String, required: true },
   dateRange: String,
@@ -86,14 +99,27 @@ const tripSchema = new mongoose.Schema({
   segments: [segmentSchema],
   stays: [staySchema],
   coverImage: String, // Optional URL for a trip cover image
-  description: String // Optional trip description
+  description: String, // Optional trip description
+  
+  // New field for trip-level default album
+  defaultAlbumId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Album'
+  }
 }, { 
   timestamps: true,
   toJSON: { virtuals: true }, 
   toObject: { virtuals: true } 
 });
 
-// Add a pre-save hook to calculate the date range
+// Virtual to get all albums for this trip
+tripSchema.virtual('albums', {
+  ref: 'Album',
+  localField: '_id',
+  foreignField: 'tripId'
+});
+
+// Add a pre-save hook to calculate the date range (unchanged)
 tripSchema.pre('save', function(next) {
   // Extract all dates
   const segmentDates = this.segments.map(segment => new Date(segment.date));
